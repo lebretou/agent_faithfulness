@@ -69,6 +69,9 @@ def main():
                     help="Override config.n_trajectories.")
     ap.add_argument("--out_dir", default=None,
                     help="Override config.out_dir. Use Drive path on Colab.")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="Override config.seed for query+perturbation RNG. "
+                         "Catalog seed is fixed at config.seed so all seeds share the world.")
     ap.add_argument("--resume", action="store_true",
                     help="Skip trajectory_ids already present in trajectories.jsonl.")
     args = ap.parse_args()
@@ -80,17 +83,21 @@ def main():
     out_dir = Path(args.out_dir or cfg["out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    catalog_path = out_dir / cfg["catalog_filename"]
     trajectories_path = out_dir / cfg["trajectories_filename"]
     activations_dir = out_dir / cfg["activations_subdir"]
     activations_dir.mkdir(parents=True, exist_ok=True)
 
-    seed = int(cfg["seed"])
-    rng = random.Random(seed)
+    catalog_seed = int(cfg["seed"])
+    rng_seed = int(args.seed) if args.seed is not None else catalog_seed
+    rng = random.Random(rng_seed)
 
-    # Catalog (deterministic) + persisted.
+    # Catalog stays deterministic across seed runs (single shared "world").
+    # Lives at the parent of out_dir so all seeded runs reuse it.
+    parent_dir = out_dir.parent if out_dir.parent != Path("") else out_dir
+    catalog_path = parent_dir / cfg["catalog_filename"]
+
     if not catalog_path.exists():
-        catalog = generate_catalog(n=cfg["catalog_size"], seed=seed)
+        catalog = generate_catalog(n=cfg["catalog_size"], seed=catalog_seed)
         save_catalog(catalog, catalog_path)
         print(f"[gen] Wrote catalog to {catalog_path}")
     else:
@@ -107,7 +114,8 @@ def main():
 
     print(f"[gen] Loading model: {cfg['model']}")
     model, tok = load_model(cfg["model"], dtype=cfg["dtype"])
-    print(f"[gen] Model loaded. Beginning generation of {n_trajectories} trajectories.")
+    print(f"[gen] Model loaded. Beginning generation of {n_trajectories} trajectories "
+          f"(catalog_seed={catalog_seed}, rng_seed={rng_seed}).")
 
     t_start = time.time()
     n_done = 0
