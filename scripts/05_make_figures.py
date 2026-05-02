@@ -50,9 +50,11 @@ def main():
     ap.add_argument("--probes_dir", default="data/probes")
     ap.add_argument("--out_dir", default="figures")
     ap.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
-    ap.add_argument("--steering_summary", default=None,
-                    help="Path to steering_summary.json (Day 3). If provided, "
-                         "writes figures/steering_curve.png.")
+    ap.add_argument("--steering_summary", nargs="*", default=None,
+                    help="Path(s) to steering_summary.json (Day 3). Multiple "
+                         "files are merged by α; duplicate αs are deduplicated "
+                         "(later file wins). If provided, writes "
+                         "figures/steering_curve.png.")
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -119,26 +121,41 @@ def main():
 
     # ---- Figure 3: steering curve (Day 3) ----
     if args.steering_summary:
-        sp = Path(args.steering_summary)
-        if sp.exists():
+        merged_per_alpha: dict[float, dict] = {}
+        best_layer = None
+        probe_auc = None
+        for sp in args.steering_summary:
+            sp = Path(sp)
+            if not sp.exists():
+                print(f"WARNING: --steering_summary {sp} does not exist.")
+                continue
             with open(sp) as f:
                 steer = json.load(f)
-            alphas = [p["alpha"] for p in steer["per_alpha"]]
-            verb   = [p["verb_rate_l2"] for p in steer["per_alpha"]]
-            rej    = [p["rej_rate_l2"] for p in steer["per_alpha"]]
-            succ   = [p["task_success_l0"] for p in steer["per_alpha"]]
+            best_layer = steer.get("best_layer", best_layer)
+            probe_auc = steer.get("probe_best_auc", probe_auc)
+            for p in steer["per_alpha"]:
+                merged_per_alpha[p["alpha"]] = p
+
+        if merged_per_alpha:
+            alphas_sorted = sorted(merged_per_alpha.keys())
+            verb = [merged_per_alpha[a]["verb_rate_l2"] for a in alphas_sorted]
+            rej  = [merged_per_alpha[a]["rej_rate_l2"]  for a in alphas_sorted]
+            succ = [merged_per_alpha[a]["task_success_l0"] for a in alphas_sorted]
+            title = "Steering"
+            if best_layer is not None:
+                title = f"Steering at layer {best_layer}"
+                if probe_auc is not None:
+                    title += f" (probe AUC={probe_auc:.2f})"
             steering_curve(
-                alphas=alphas,
+                alphas=alphas_sorted,
                 verb_rate=verb,
                 rej_rate=rej,
                 clean_success=succ,
                 out_path=out_dir / "steering_curve.png",
-                title=(f"Steering at layer {steer['best_layer']} "
-                       f"(probe AUC={steer['probe_best_auc']:.2f})"),
+                title=title,
             )
-            print(f"Wrote {out_dir / 'steering_curve.png'}")
-        else:
-            print(f"WARNING: --steering_summary {sp} does not exist.")
+            print(f"Wrote {out_dir / 'steering_curve.png'} "
+                  f"({len(alphas_sorted)} α values)")
 
 
 if __name__ == "__main__":
