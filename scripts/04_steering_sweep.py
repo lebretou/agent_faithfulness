@@ -45,35 +45,78 @@ from src.probes import load_probe_results  # noqa: E402
 from src.steering import probe_direction_from_weights, attach_steering_hook  # noqa: E402
 
 
+def _existing_ids(jsonl_path: Path) -> set[str]:
+    if not jsonl_path.exists():
+        return set()
+    ids = set()
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ids.add(json.loads(line)["trajectory_id"])
+            except (json.JSONDecodeError, KeyError):
+                pass
+    return ids
+
+
+def _read_existing(jsonl_path: Path) -> list[dict]:
+    out = []
+    if not jsonl_path.exists():
+        return out
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                out.append(json.loads(line))
+    return out
+
+
 def _generate_block(
     model, tok, catalog, level, n, rng, trajectory_prefix, max_steps,
-    activations_dir,
+    jsonl_path: Path, resume: bool = True,
 ):
-    """Generate `n` trajectories at `level`. Returns list of trajectory dicts."""
-    out = []
-    for i in range(n):
-        try:
-            q = sample_query(catalog, n_constraints=3, rng=rng,
-                             query_id=f"{trajectory_prefix}_q{i:03d}")
-            traj = run_trajectory(
-                model, tok,
-                catalog=catalog,
-                query=q,
-                perturbation_level=level,
-                rng=rng,
-                trajectory_id=f"{trajectory_prefix}_t{i:03d}",
-                max_steps=max_steps,
-                # Skip activation capture for steering: not needed, saves time/disk.
-                capture_activations=False,
-                activations_dir=activations_dir,
-            )
-        except Exception as e:
-            print(f"    {trajectory_prefix}_t{i:03d} crashed: {e!r}")
-            continue
-        if traj["final_action"] is None:
-            continue
-        compute_all_labels(traj)
-        out.append(traj)
+    """Generate `n` trajectories at `level`, appending each to JSONL immediately.
+
+    Resumes from existing IDs in jsonl_path if resume=True. Returns the full
+    list of trajectories for this block (including any pre-existing ones).
+    """
+    done_ids = _existing_ids(jsonl_path) if resume else set()
+    if done_ids:
+        print(f"    [{trajectory_prefix}] resume: {len(done_ids)} already on disk")
+
+    out = _read_existing(jsonl_path) if resume else []
+    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(jsonl_path, "a") as fout:
+        for i in range(n):
+            traj_id = f"{trajectory_prefix}_t{i:03d}"
+            if traj_id in done_ids:
+                continue
+            try:
+                q = sample_query(catalog, n_constraints=3, rng=rng,
+                                 query_id=f"{trajectory_prefix}_q{i:03d}")
+                traj = run_trajectory(
+                    model, tok,
+                    catalog=catalog,
+                    query=q,
+                    perturbation_level=level,
+                    rng=rng,
+                    trajectory_id=traj_id,
+                    max_steps=max_steps,
+                    capture_activations=False,
+                    activations_dir=None,
+                )
+            except Exception as e:
+                print(f"    {traj_id} crashed: {e!r}")
+                continue
+            if traj["final_action"] is None:
+                continue
+            compute_all_labels(traj)
+            fout.write(json.dumps(traj, default=str) + "\n")
+            fout.flush()
+            out.append(traj)
     return out
 
 
@@ -102,6 +145,8 @@ def main():
     ap.add_argument("--continuous", action="store_true",
                     help="Steer on every generated token, not prefill-only. "
                          "Off-spec; default matches §10.2.")
+    ap.add_argument("--no_resume", action="store_true",
+                    help="Disable resume; overwrite existing per-α JSONLs.")
     args = ap.parse_args()
 
     with open(args.config) as f:
@@ -154,9 +199,9 @@ def main():
 
         alpha_dir = out_dir / f"alpha_{alpha:g}"
         alpha_dir.mkdir(exist_ok=True)
-        jsonl_path = alpha_dir / "trajectories.jsonl"
-        if jsonl_path.exists():
-            jsonl_path.unlink()  # fresh per re-run
+        l2_jsonl = alpha_dir / "trajectories_l2.jsonl"
+        l0_jsonl = alpha_dir / "trajectories_l0.jsonl"
+        combined_jsonl = alpha_dir / "trajectories.jsonl"
 
         t0 = time.time()
         handle = attach_steering_hook(
@@ -169,20 +214,21 @@ def main():
                 model, tok, catalog, level=2, n=args.n_l2, rng=rng_l2,
                 trajectory_prefix=f"steer_a{alpha:g}_l2",
                 max_steps=cfg["max_steps"],
-                activations_dir=alpha_dir / "activations",
+                jsonl_path=l2_jsonl, resume=not args.no_resume,
             )
             print(f"[steer]   generating {args.n_l0} L0 trajectories...")
             l0_trajs = _generate_block(
                 model, tok, catalog, level=0, n=args.n_l0, rng=rng_l0,
                 trajectory_prefix=f"steer_a{alpha:g}_l0",
                 max_steps=cfg["max_steps"],
-                activations_dir=alpha_dir / "activations",
+                jsonl_path=l0_jsonl, resume=not args.no_resume,
             )
         finally:
             handle.remove()
         elapsed = time.time() - t0
 
-        with open(jsonl_path, "w") as f:
+        # Combined view for downstream consumers.
+        with open(combined_jsonl, "w") as f:
             for t in l2_trajs + l0_trajs:
                 f.write(json.dumps(t, default=str) + "\n")
 
