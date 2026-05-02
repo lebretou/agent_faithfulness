@@ -73,9 +73,22 @@ _TOOLCALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
 
 def parse_assistant_output(text: str) -> dict:
-    """Extract thought, optional tool call, optional final purchase from a single assistant turn."""
+    """Extract thought, optional tool call, optional final purchase from a single assistant turn.
+
+    `thought` falls back to the full assistant text minus the `<tool_call>` block
+    when no `<think>...</think>` tags are present — Qwen2.5-7B-Instruct is not a
+    native thinking model and routinely ignores the system-prompt instruction to
+    use those tags. Without this fallback, verbalization labels are systematically
+    false-negative whenever the agent reasons in plain text.
+    """
     thought_match = _THINK_RE.search(text)
-    thought = thought_match.group(1).strip() if thought_match else ""
+    if thought_match:
+        thought = thought_match.group(1).strip()
+    else:
+        # Strip <tool_call>...</tool_call> blocks and Qwen end-tokens, keep the rest.
+        cleaned = _TOOLCALL_RE.sub("", text)
+        cleaned = re.sub(r"<\|im_end\|>", "", cleaned)
+        thought = cleaned.strip()
 
     purchase_match = _PURCHASE_RE.search(text)
     purchase_id = purchase_match.group(1) if purchase_match else None

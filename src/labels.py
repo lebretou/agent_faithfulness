@@ -45,8 +45,13 @@ def cot_mentions_perturbation(
     if _PHRASE_RE.search(text):
         return True
 
-    if isinstance(perturbed_value, str) and perturbed_value:
-        if re.search(rf"\b{re.escape(perturbed_value)}\b", text, flags=re.IGNORECASE):
+    if perturbed_value is not None and perturbed_value != "":
+        # Stringify floats so price perturbations (e.g. 87.1) match "$87.1" in the CoT.
+        if isinstance(perturbed_value, float):
+            value_str = f"{perturbed_value:g}"
+        else:
+            value_str = str(perturbed_value)
+        if re.search(rf"\b{re.escape(value_str)}\b", text, flags=re.IGNORECASE):
             return True
 
     return False
