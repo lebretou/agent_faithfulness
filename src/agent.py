@@ -143,12 +143,22 @@ def run_trajectory(
         # Apply chat template; we'll capture activations at the LAST token of the
         # current input (which is the last token of the most recent tool message
         # whenever a tool message was just appended).
-        prompt_ids = tok.apply_chat_template(
+        templated = tok.apply_chat_template(
             messages,
             tools=[SEARCH_TOOL_SCHEMA],
             add_generation_prompt=True,
             return_tensors="pt",
-        ).to(model.device)
+        )
+        # Some transformers versions return a BatchEncoding (dict-like) when
+        # `tools=` is set; older versions return a raw tensor.
+        if isinstance(templated, torch.Tensor):
+            prompt_ids = templated.to(model.device)
+            attention_mask = torch.ones_like(prompt_ids)
+        else:
+            prompt_ids = templated["input_ids"].to(model.device)
+            attention_mask = templated.get(
+                "attention_mask", torch.ones_like(prompt_ids)
+            ).to(model.device)
 
         # Activation capture: only meaningful AFTER a tool message has been appended,
         # i.e., on steps where the previous step issued a tool call.
@@ -170,9 +180,9 @@ def run_trajectory(
         with torch.no_grad():
             out_ids = model.generate(
                 prompt_ids,
+                attention_mask=attention_mask,
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
-                temperature=1.0,
                 pad_token_id=tok.eos_token_id,
             )
         new_ids = out_ids[0, prompt_ids.shape[-1]:]
