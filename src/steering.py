@@ -58,13 +58,23 @@ def cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (na * nb))
 
 
-def make_steering_hook(direction, alpha: float, position: int = -1):
+def make_steering_hook(
+    direction,
+    alpha: float,
+    position: int = -1,
+    prefill_only: bool = True,
+):
     """Forward hook that adds α·direction to the residual stream at `position`.
 
     `direction` is a 1-D array/tensor of shape (hidden_dim,). The hook expects
     the wrapped module to return a tuple whose first element is hidden states
     of shape (batch, seq, hidden) — standard layout for a HuggingFace
     transformer block.
+
+    `prefill_only=True` (default, matches project_plan.md §10.2): only fire on
+    multi-token forward passes (prefill), not on cached single-token generation
+    steps. This nudges the model's representation of the input *before* CoT
+    begins, rather than persistently altering every token it generates.
 
     Lazy torch import — only the model-running environment needs this.
     """
@@ -83,6 +93,9 @@ def make_steering_hook(direction, alpha: float, position: int = -1):
         else:
             hidden = output
             rest = ()
+        # Skip cached single-token generation steps when prefill_only.
+        if prefill_only and hidden.shape[1] <= 1:
+            return output
         d = direction_t.to(device=hidden.device, dtype=hidden.dtype)
         hidden = hidden.clone()
         hidden[:, position, :] = hidden[:, position, :] + alpha * d
@@ -93,7 +106,14 @@ def make_steering_hook(direction, alpha: float, position: int = -1):
     return hook
 
 
-def attach_steering_hook(model, layer_idx: int, direction, alpha: float, position: int = -1):
+def attach_steering_hook(
+    model,
+    layer_idx: int,
+    direction,
+    alpha: float,
+    position: int = -1,
+    prefill_only: bool = True,
+):
     """Attach the hook and return the handle (caller is responsible for `.remove()`)."""
-    hook = make_steering_hook(direction, alpha, position=position)
+    hook = make_steering_hook(direction, alpha, position=position, prefill_only=prefill_only)
     return model.model.layers[layer_idx].register_forward_hook(hook)

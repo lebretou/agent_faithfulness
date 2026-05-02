@@ -22,7 +22,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.figures import probe_auc_by_layer, three_curve_plot
+from src.figures import probe_auc_by_layer, three_curve_plot, steering_curve
 from src.probes import load_probe_results
 
 
@@ -50,6 +50,9 @@ def main():
     ap.add_argument("--probes_dir", default="data/probes")
     ap.add_argument("--out_dir", default="figures")
     ap.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
+    ap.add_argument("--steering_summary", default=None,
+                    help="Path to steering_summary.json (Day 3). If provided, "
+                         "writes figures/steering_curve.png.")
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -113,6 +116,29 @@ def main():
         title="Verbalization vs Action vs Probe by perturbation level",
     )
     print(f"Wrote {out_dir / 'three_curve_plot.png'}")
+
+    # ---- Figure 3: steering curve (Day 3) ----
+    if args.steering_summary:
+        sp = Path(args.steering_summary)
+        if sp.exists():
+            with open(sp) as f:
+                steer = json.load(f)
+            alphas = [p["alpha"] for p in steer["per_alpha"]]
+            verb   = [p["verb_rate_l2"] for p in steer["per_alpha"]]
+            rej    = [p["rej_rate_l2"] for p in steer["per_alpha"]]
+            succ   = [p["task_success_l0"] for p in steer["per_alpha"]]
+            steering_curve(
+                alphas=alphas,
+                verb_rate=verb,
+                rej_rate=rej,
+                clean_success=succ,
+                out_path=out_dir / "steering_curve.png",
+                title=(f"Steering at layer {steer['best_layer']} "
+                       f"(probe AUC={steer['probe_best_auc']:.2f})"),
+            )
+            print(f"Wrote {out_dir / 'steering_curve.png'}")
+        else:
+            print(f"WARNING: --steering_summary {sp} does not exist.")
 
 
 if __name__ == "__main__":

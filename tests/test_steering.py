@@ -49,17 +49,39 @@ def test_cosine_basic():
     assert abs(cosine(a, a) - 1.0) < 1e-9
 
 
-def test_make_steering_hook_pure_python():
-    """Smoke test the hook closure logic with fake tensors. Skips if torch missing."""
+def test_make_steering_hook_prefill_fires():
+    """Multi-token prefill input: hook fires."""
     torch = pytest.importorskip("torch")
     from src.steering import make_steering_hook
-    hidden = torch.zeros(1, 4, 8)  # (batch, seq, hidden)
+    hidden = torch.zeros(1, 4, 8)  # (batch, seq=4, hidden)
     direction = torch.ones(8)
-    hook = make_steering_hook(direction, alpha=2.0, position=-1)
-    # Simulate a transformer block returning (hidden, ...)
+    hook = make_steering_hook(direction, alpha=2.0, position=-1, prefill_only=True)
     out = hook(None, None, (hidden,))
     new_hidden = out[0]
-    # Last position should have +2 added to every element.
     assert torch.allclose(new_hidden[0, -1, :], torch.full((8,), 2.0))
-    # Other positions untouched.
     assert torch.allclose(new_hidden[0, 0, :], torch.zeros(8))
+
+
+def test_make_steering_hook_skips_generation_step_when_prefill_only():
+    """Single-token cached generation step: prefill_only hook should no-op."""
+    torch = pytest.importorskip("torch")
+    from src.steering import make_steering_hook
+    hidden = torch.zeros(1, 1, 8)  # (batch, seq=1, hidden) — autoregressive step
+    direction = torch.ones(8)
+    hook = make_steering_hook(direction, alpha=2.0, position=-1, prefill_only=True)
+    out = hook(None, None, (hidden,))
+    new_hidden = out[0]
+    # Hook should leave it untouched.
+    assert torch.allclose(new_hidden[0, 0, :], torch.zeros(8))
+
+
+def test_make_steering_hook_continuous_mode():
+    """prefill_only=False: hook fires on single-token steps too."""
+    torch = pytest.importorskip("torch")
+    from src.steering import make_steering_hook
+    hidden = torch.zeros(1, 1, 8)
+    direction = torch.ones(8)
+    hook = make_steering_hook(direction, alpha=2.0, position=-1, prefill_only=False)
+    out = hook(None, None, (hidden,))
+    new_hidden = out[0]
+    assert torch.allclose(new_hidden[0, 0, :], torch.full((8,), 2.0))
