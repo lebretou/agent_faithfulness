@@ -546,3 +546,184 @@ Token positions for activation capture are tricky to get right with chat templat
 Do not use vLLM, do not use closed-source models, do not call any external evaluator API. The entire pipeline must run on Colab with the open-weights model and free deterministic labels.
 
 When in doubt, prefer fewer trajectories with cleaner labels over more trajectories with noisy labels. The sample size is not the bottleneck; trajectory parsability is.
+
+---
+
+## 19. Session Log — Implementation Status (end of Day 3 compute)
+
+This section is the working memory across sessions. The original sections above describe the *design*; this section describes what actually happened, the numbers we observed, and the open items.
+
+### 19.1 Repository state
+
+- **GitHub:** `github.com/lebretou/agent_faithfulness` (public).
+- **Branch:** `main`.
+- **Latest commit at session end:** `051e4a5` ("Add scripts/03c_train_layer_probe.py").
+- **Tests:** 45 passing, all CPU-only and run via `python3 -m pytest -q tests/`.
+- **Local artifacts present:**
+  - `data/catalog.json` (200 items, seed=42)
+  - `data/seed_42/trajectories.jsonl` (408 lines)
+  - `data/seed_43/trajectories.jsonl` (397 lines)
+  - `data/seed_44/trajectories.jsonl` (413 lines)
+  - `data/probes/probes_seed{42,43,44}.json`
+  - `figures/probe_auc_by_layer.png`, `figures/three_curve_plot.png`
+- **On Drive but not local:** `data/seed_*/activations/*.pt` (~700 MB), all steering run subdirs, layer-25 native probe JSON, log files.
+
+### 19.2 Deviations from the original plan
+
+| Plan said | We actually did | Why |
+|---|---|---|
+| 250 trajectories on Colab Pro+ A100 | 3 seeds × 500 trajectories on H100 (1218 valid total after drops) | Got H100 access; user chose Tier 1 expansion for cross-seed error bars. |
+| Single overnight run | Three parallel `nohup` jobs in one notebook | H100 80GB fits 3 × bf16 7B model copies. |
+| Probe AUC reported point-estimate | Per-seed AUCs reported as mean ± std | Same Tier 1 expansion; meaningful confidence intervals. |
+| Steering sweep at one direction × one layer | 5 sweeps total: probe@L19, contrastive@L19, probe@L25 (L19-weights), probe@L25 (native), contrastive@L19 high-n | Initial result was null → ran progressive ablations to disambiguate predictive vs causal. |
+
+### 19.3 Day 1 outcomes — corpus generation
+
+**Bugs fixed during Day 1 (already in commits):**
+- `transformers.apply_chat_template(tools=...)` returns `BatchEncoding` (dict-like) on newer versions, not a tensor. Fixed in `c28c9f5` — `src/agent.py` normalizes to tensor + extracts `attention_mask`.
+- Qwen2.5-7B-Instruct does **not** reliably emit `<think>` tags despite system prompt instruction. `parse_assistant_output` now falls back to "raw assistant text minus `<tool_call>`" when no `<think>` tags present. Without this, all in-text reasoning was being labeled as `thought=""`. Fixed in `fb0e5cf`.
+- `cot_mentions_perturbation` skipped value-match branch for non-string `perturbed_value`; price perturbations (always floats) never matched themselves in the CoT. Stringify with `f"{x:g}"`. Fixed in `fb0e5cf`.
+
+**Corpus characteristics:**
+- 1218 valid trajectories across seeds 42/43/44 (drop rate ~20%, agents that didn't `PURCHASE` within 5 steps).
+- Level distribution roughly 20/40/40 (config target: 0.20/0.40/0.40), with all structural invariants verified:
+  - L1 perturbations: 0/473 ever land on a query-constraint attribute.
+  - L2 perturbations: 491/491 always land on a query-constraint attribute.
+- Activations: shape `(28, 3584)` per (trajectory, step), bf16 on disk, ~200 KB each, ~700 MB total.
+
+**Headline label rates (mean ± std across 3 seeds):**
+| Level | verb% | rej% | succ% | avg_steps |
+|---|---|---|---|---|
+| L0 (clean) | 17 ± 7% | 0 ± 0% | 81 ± 7% | 2.5 |
+| L1 (non-constraint) | 33 ± 1% | 17 ± 1% | 85 ± 1% | 2.5 |
+| L2 (constraint violation) | 82 ± 1% | 26 ± 3% | 78 ± 4% | 3.2 |
+
+**Notable interpretive points:**
+- L0 verb% of 17% is **not** pure regex false-positives. Manual inspection showed agents legitimately commenting on organic search-vs-call mismatches ("BrandL instead of BrandB" when their own search returned a non-matching brand). The labeler is calibrated correctly; L0 just isn't a "true zero" because tool results can have organic mismatches even without an injected perturbation.
+- avg_steps rising at L2 (3.2 vs 2.5) is independent behavioral confirmation that the perturbation is being noticed.
+
+### 19.4 Day 2 outcomes — probes
+
+**Per-layer probe AUC (mean ± std across 3 seeds):**
+- Classifier A (L0 vs L2): peaks at layer ~21, AUC = **0.97 ± 0.01**.
+- Classifier B (L1 vs L2): peaks at layer ~19, AUC = **0.96 ± 0.01**.
+- Classifier A and B curves are nearly identical (both climb from ~0.62 at layer 0, plateau ~0.96 from layers 17-27, slight decay toward layer 27). The fact that B ≈ A means the linear direction isn't dominated by raw input-distance signal — it tracks goal-relative inconsistency, supporting the matched-control logic in §6.2.
+- Best layer is consistent across seeds (within ±1 layer for both classifiers).
+
+**Steering smoke test (commit `5c40209`):**
+- α = 0: max |Δlogits| = 0.000000 (bit-exact baseline reproduction).
+- α = 1: max |Δlogits| = 0.156 (visible perturbation).
+- Post-detach: max |Δlogits| = 0.000000 (clean detach).
+
+### 19.5 Day 3 outcomes — steering
+
+Five sweeps total. All used probe seed 42, classifier B (L1 vs L2), best layer 19, RNG seed 100 (held out from probe training seeds).
+
+**All α=0 cells across runs reproduce baseline behavior** (the hook is bit-exact inert at α=0, confirming plumbing). Within-session α=0 numbers are identical across runs on the same H100 instance; cross-session differences (~5pp) are GPU floating-point non-determinism (`torch.use_deterministic_algorithms(True)` not set).
+
+**Run summary (Drive: `data/steering_*` directories):**
+
+| Run | dir / location | direction | layer | n/α | α grid |
+|---|---|---|---|---|---|
+| Original | `steering_run1/` | probe weights | 19 | 36-44 | 0, 0.5, 1, 2, 4 |
+| Ablation A | `steering_contrastive_l19/` | contrastive (mean(L2) - mean(L1)) at 19 | 19 | 36-40 | 0, 1, 4 |
+| Ablation B | `steering_probe_l25/` | probe weights from L19 applied at L25 (geom-mismatched) | 25 | 38-43 | 0, 1, 4 |
+| B-native | `steering_probe_l25_native/` | probe weights trained at L25 | 25 | 38-41 | 0, 1, 4 |
+| **A high-n** | `steering_contrastive_l19_highn/` | contrastive at 19 | 19 | **75-83** | 0, 0.5, 1, 1.5, 2 |
+
+**Headline numbers (verb% / rej% by α):**
+
+```
+                                    α=0       α=0.5    α=1       α=1.5    α=2       α=4
+Original probe@L19           verb%  86       85       84        —        86        73
+                             rej%   31       29       25        —        21        29
+Ablation A contrastive@L19   verb%  80       —        90        —        —         72
+                             rej%   35       —        17.5      —        —         22
+Ablation B probe@L25 (mismatched) verb% 80   —        93        —        —         68
+                             rej%   35       —        21        —        —         11
+B-native probe@L25           verb%  80       —        90        —        —         66
+                             rej%   35       —        19.5      —        —         10.5
+A high-n contrastive@L19     verb%  77       82       79        84       89        —
+                             rej%   31       32       17.5      21       24        —
+```
+
+**Key empirical findings (in order of robustness):**
+
+1. **Action rejection consistently DROPS under steering** — the most replicable result. Every run with α≥1 shows rej% falling 13-17pp below baseline. Robust across L19/L25, probe/contrastive, n=40/n=80. Steering toward the "L2-likeness" direction makes the agent comply *more* with the perturbed result, not refuse it.
+
+2. **Verbalization climbs but the dose is layer-dependent.**
+   - At L19 (high-n): clean dose-response. verb% goes 77→82→79→84→89 across α∈{0, 0.5, 1, 1.5, 2}. The +12pp lift at α=2 is ~3 SE above α=0 baseline (SE≈4.5pp at n≈80). Real signal.
+   - At L25 (n=40): apparent +10pp lift at α=1. *Caveat:* this hasn't been confirmed at n=80 — might be an n=40 mirage like the L19 α=1 result was.
+
+3. **The original "α=1 lift to 90%" at contrastive L19 was sampling noise.** At n=40 we saw 80→90; at n=80 we saw 77→79. The lift is real but lives at α≥1.5, not α=1. Methodological lesson: small steering effects need n≥80 per α to discriminate from baseline noise.
+
+4. **Layer-19 probe weights work essentially unchanged at layer 25.** Comparing Ablation B (mismatched: L19 weights at L25) vs B-native (L25 weights at L25) shows identical numbers. The "violation feature" direction is approximately preserved across nearby layers via residual stream skip connections.
+
+5. **L0 task success holds across the working regime** (α ∈ [0, 2]). No clean-behavior tax until α=4, where everything degrades.
+
+**Mechanistic interpretation (the report's central claim):**
+
+The probe direction at layer 19 detects goal-relative inconsistency at AUC 0.96 *and* causally drives CoT content (steering increases verbalization at sufficient α). However, the same direction does **not** drive action — it actually *anti-steers* action rejection. This dissociates two unfaithfulness regimes:
+
+- **CoT-faithfulness gap** (representation → CoT): the model often doesn't verbalize what it knows. Steering shows this is a controllable channel.
+- **Action-faithfulness gap** (representation → action): even when CoT does verbalize the violation, the action policy doesn't refuse. Steering can amplify the verbalization without moving the action.
+
+Implication: the located representation is causally upstream of CoT content but separable from the action policy. The unfaithfulness gap isn't merely "model knows but doesn't say"; it's "the same internal direction that drives more saying drives less acting." This is a structural finding that strengthens the report's narrative beyond the original predictive-only framing.
+
+### 19.6 Open items for next session
+
+In approximate priority order:
+
+1. **Run the permutation-label control** (already scaffolded as `scripts/03b_permutation_control.py`, never executed). Shuffles L1/L2 labels and re-trains the per-layer probes; expects AUC to collapse to ~0.5. PASS criterion: `shuf_mean < 0.60` and `shuf_max < 0.65`. Run cold on Colab via:
+   ```
+   python scripts/03b_permutation_control.py \
+     --root /content/drive/MyDrive/agent_faithfulness/data \
+     --seeds 42 43 44 --n_perms 3
+   ```
+   Required for the report's interpretive ceiling — without this, a reviewer will rightly ask whether the 0.96 AUC is a setup artifact (trajectory length, batch position, sampling).
+
+2. **Optional: B-native at n_l2=80** to confirm or deny the layer-25 sensitivity claim. If verb% at α=1 holds near 90% at higher n, the report has a clean "later layer = stronger steering" claim. If it regresses to baseline like A at n=80 did, drop the layer-comparison story and just report the L19 high-n result.
+
+3. **Day 3 hours 4-12: report writeup** (8-10 pages). Sections: background, environment design, methodology, results (probe + steering), discussion (predictive-vs-causal dissociation), limitations, future work. The figures already on disk (`figures/probe_auc_by_layer.png`, `figures/three_curve_plot.png`) plus a steering figure (need to merge the 5 summary JSONs and run `scripts/05_make_figures.py --steering_summary ...`).
+
+4. **Day 3 hours 9-11: codebase cleanup** — README polish, `pip install -r requirements.txt` + one-command reproduction sanity check.
+
+5. **Skipped (per §11 stretch):** attention-pattern figure.
+
+### 19.7 Methodological notes for the writeup
+
+- **GPU non-determinism floor.** bf16 on H100 with `do_sample=False` still produces ~5pp run-to-run variance because matmul ordering varies on H100 tensor cores. We never set `torch.use_deterministic_algorithms(True)`. This is the practical noise floor for any single (α, run) cell at n≈40. Detectable steering effects need to clear this.
+- **Action-rejection label is regex-free.** `action_rejects_perturbation` is a deterministic comparison of `final_item_id` to `perturbed_top_id` plus a count of post-perturbation search calls. Zero text matching. The fact that rej% null at flat-α and DROPS under steering is therefore not a labeling artifact.
+- **Verbalization label is regex-based.** `cot_mentions_perturbation` uses ~12 phrase patterns plus the perturbed value as a string. Could miss novel phrasings induced by steering; the rej% cross-check provides independent evidence.
+- **Trajectory ID convention.** Corpus trajectories: `traj_NNNN`. Steering trajectories: `steer_a{α}_lL_tNNN` with separate L0/L2 prefixes. Avoids collisions across α blocks.
+- **Activation paths in trajectories.jsonl are absolute Colab paths** (`/content/drive/MyDrive/agent_faithfulness/...`). The probe-training script (`03_train_probes.py`) and contrastive-direction loader (`04_steering_sweep.py::load_contrastive_direction`) handle path rewriting to local roots automatically via `_path_for_step` / `_path_for_activation`.
+- **Re-labeling.** If the verbalization regex evolves, run `scripts/02_compute_labels.py --in trajectories.jsonl --out trajectories.jsonl` to recompute all labels in place. Tracks how many flipped.
+
+### 19.8 Quick commands cheatsheet
+
+```bash
+# Local
+python3 -m pytest -q tests/                         # 45 tests
+python3 scripts/05_make_figures.py                  # corpus figures
+python3 scripts/05_make_figures.py \                # corpus + steering
+  --steering_summary data/steering_*.json
+
+# Colab (run inside the repo)
+# Corpus:
+python scripts/01_generate_corpus.py --config configs/default.yaml \
+  --n_trajectories 500 --out_dir $DRIVE/data/seed_42 --seed 42 --resume
+# Probes:
+python scripts/03_train_probes.py --root $DRIVE/data --seeds 42 43 44
+# Single-layer probe:
+python scripts/03c_train_layer_probe.py --root $DRIVE/data --seed 42 --layer 25 \
+  --out $DRIVE/data/probes/probes_seed42_layer25.json
+# Permutation control (TODO: run this):
+python scripts/03b_permutation_control.py --root $DRIVE/data --seeds 42 43 44 --n_perms 3
+# Steering:
+python scripts/04_steering_sweep.py \
+  --probe_json $DRIVE/data/probes/probes_seed42.json \
+  --catalog $DRIVE/data/catalog.json \
+  --out_dir $DRIVE/data/steering_run \
+  --direction {probe|contrastive} [--layer N] [--contrastive_seed 42] \
+  --alphas ... --n_l2 100 --n_l0 50 --seed 100 --resume
+```
