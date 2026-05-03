@@ -41,8 +41,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.agent import load_model, run_trajectory  # noqa: E402
 from src.queries import sample_query  # noqa: E402
 from src.labels import compute_all_labels  # noqa: E402
-from src.probes import load_probe_results  # noqa: E402
-from src.steering import probe_direction_from_weights, attach_steering_hook  # noqa: E402
+from src.probes import load_probe_results, load_activations  # noqa: E402
+from src.steering import (
+    probe_direction_from_weights, attach_steering_hook,
+)  # noqa: E402
+
+import numpy as np  # noqa: E402
 
 
 def _existing_ids(jsonl_path: Path) -> set[str]:
@@ -126,6 +130,77 @@ def _aggregate(trajs, label_key):
     return sum(int(t["labels"][label_key]) for t in trajs) / len(trajs)
 
 
+def _path_for_activation(s, corpus_root: Path, seed: int) -> Path | None:
+    p = s.get("activations_path")
+    if not p:
+        return None
+    p = Path(p)
+    if p.exists():
+        return p
+    parts = p.parts
+    if "activations" in parts:
+        idx = parts.index("activations")
+        rel = Path(*parts[idx:])
+        candidate = corpus_root / f"seed_{seed}" / rel
+        if candidate.exists():
+            return candidate
+    candidate = corpus_root / f"seed_{seed}" / "activations" / p.name
+    return candidate if candidate.exists() else None
+
+
+def load_contrastive_direction(
+    corpus_root: Path,
+    seed: int,
+    layer_idx: int,
+    classes: tuple[int, int] = (1, 2),
+) -> np.ndarray:
+    """Mean(class[1]) - Mean(class[0]) at `layer_idx`, normalized.
+
+    Walks the seed's trajectories.jsonl, loads activations at every step that
+    belongs to one of the two classes, and computes the difference of means
+    at the requested layer.
+    """
+    jsonl = corpus_root / f"seed_{seed}" / "trajectories.jsonl"
+    paths: list[Path] = []
+    labels: list[int] = []
+    with open(jsonl) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            t = json.loads(line)
+            lvl = int(t["perturbation_level"])
+            if lvl not in classes:
+                continue
+            for s in t["steps"]:
+                p = _path_for_activation(s, corpus_root, seed)
+                if p is None:
+                    continue
+                paths.append(p)
+                labels.append(lvl)
+
+    if not paths:
+        raise RuntimeError(
+            f"No activations found for seed {seed} under {corpus_root}."
+        )
+
+    print(f"[contrastive] loading {len(paths)} activations for layer {layer_idx}...")
+    activations = load_activations(paths)  # (n, n_layers, hidden)
+    labels_arr = np.array(labels, dtype=np.int64)
+    pos = activations[labels_arr == classes[1], layer_idx, :].astype(np.float32)
+    neg = activations[labels_arr == classes[0], layer_idx, :].astype(np.float32)
+    if pos.size == 0 or neg.size == 0:
+        raise RuntimeError(
+            f"Need both classes; got n_pos={len(pos)}, n_neg={len(neg)}"
+        )
+    diff = pos.mean(axis=0) - neg.mean(axis=0)
+    n = float(np.linalg.norm(diff))
+    if n == 0:
+        raise RuntimeError("Mean-difference is zero — classes have identical means.")
+    print(f"[contrastive] n_pos={len(pos)}  n_neg={len(neg)}  ||diff||={n:.4f}")
+    return diff / n
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/default.yaml")
@@ -147,6 +222,18 @@ def main():
                          "Off-spec; default matches §10.2.")
     ap.add_argument("--no_resume", action="store_true",
                     help="Disable resume; overwrite existing per-α JSONLs.")
+    ap.add_argument("--direction", choices=["probe", "contrastive"], default="probe",
+                    help="probe (default) = unit-normalized logistic regression "
+                         "weights; contrastive = mean(L2) - mean(L1) at the chosen "
+                         "layer, normalized.")
+    ap.add_argument("--layer", type=int, default=None,
+                    help="Override probe.best_layer with a specific layer index. "
+                         "Affects both probe and contrastive directions.")
+    ap.add_argument("--corpus_root", default=None,
+                    help="Path containing seed_<N>/ for contrastive direction. "
+                         "If omitted, inferred as parent of probe_json's parent.")
+    ap.add_argument("--contrastive_seed", type=int, default=42,
+                    help="Which seed's activations to use for the contrastive direction.")
     args = ap.parse_args()
 
     with open(args.config) as f:
@@ -156,16 +243,40 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "activations").mkdir(exist_ok=True)  # placeholder, unused
 
-    # --- Load probe direction ---
+    # --- Load probe metadata (used either for direction or just for best_layer) ---
     results = load_probe_results(args.probe_json)
     res = next((r for r in results if r.classifier == args.classifier), None)
     if res is None:
         raise SystemExit(f"Classifier {args.classifier} not found in {args.probe_json}. "
                          f"Available: {[r.classifier for r in results]}")
-    best_layer = res.best_layer
-    direction = probe_direction_from_weights(np.asarray(res.best_layer_weights))
-    print(f"[steer] probe={args.classifier}  best_layer={best_layer}  "
-          f"best_auc={res.best_auc:.4f}  direction_norm={np.linalg.norm(direction):.4f}")
+
+    # Layer choice: --layer overrides probe.best_layer.
+    layer_idx = args.layer if args.layer is not None else res.best_layer
+
+    # --- Direction ---
+    if args.direction == "probe":
+        if args.layer is not None and args.layer != res.best_layer:
+            print(f"[steer] WARNING: probe weights came from layer {res.best_layer}, "
+                  f"steering at layer {layer_idx}. Direction is still the layer-{res.best_layer} "
+                  f"probe vector applied at layer {layer_idx}.")
+        direction = probe_direction_from_weights(np.asarray(res.best_layer_weights))
+    else:  # contrastive
+        if args.corpus_root is None:
+            corpus_root = Path(args.probe_json).resolve().parent.parent
+            print(f"[steer] inferred corpus_root={corpus_root}")
+        else:
+            corpus_root = Path(args.corpus_root)
+        direction = load_contrastive_direction(
+            corpus_root=corpus_root,
+            seed=args.contrastive_seed,
+            layer_idx=layer_idx,
+            classes=(1, 2),
+        )
+
+    print(f"[steer] probe={args.classifier}  layer={layer_idx}  "
+          f"best_auc(probe)={res.best_auc:.4f}  direction={args.direction}  "
+          f"direction_norm={np.linalg.norm(direction):.4f}")
+    best_layer = layer_idx  # used downstream as the steering layer
 
     # --- Load catalog ---
     with open(args.catalog) as f:
@@ -181,7 +292,11 @@ def main():
         "probe_json": str(args.probe_json),
         "classifier": args.classifier,
         "best_layer": best_layer,
+        "steering_layer": layer_idx,
+        "probe_best_layer": res.best_layer,
         "probe_best_auc": res.best_auc,
+        "direction": args.direction,
+        "contrastive_seed": args.contrastive_seed if args.direction == "contrastive" else None,
         "alphas": list(args.alphas),
         "n_l2_target": args.n_l2,
         "n_l0_target": args.n_l0,
