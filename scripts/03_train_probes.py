@@ -1,6 +1,6 @@
-"""Train per-layer probes on Drive-resident activations.
+"""Train per-layer probes on captured residual-stream activations.
 
-project_plan.md §8. Runs on Colab (or any host with the activations on disk).
+Runs on any host with the activations on disk (CPU is fine).
 
 For each seed:
   - Load all trajectories' activation tensors at every captured (traj, step).
@@ -8,9 +8,8 @@ For each seed:
   - Train Classifier A (L0 vs L2) and Classifier B (L1 vs L2) per layer.
   - Save AUC-by-layer + best-layer probe weights to a JSON next to the JSONL.
 
-Usage (Colab):
-    python scripts/03_train_probes.py --root /content/drive/MyDrive/agent_faithfulness/data \
-                                      --seeds 42 43 44
+Usage:
+    python scripts/03_train_probes.py --root data --seeds 42 43 44
 """
 from __future__ import annotations
 
@@ -35,7 +34,7 @@ def _path_for_step(s: dict, root: Path, seed: int, fallback_traj_id: str) -> Pat
     p = Path(p)
     if p.exists():
         return p
-    # Path stored at generation time was Colab-absolute. Map to local root.
+    # Path stored at generation time is absolute on the GPU host. Map to local root.
     # Last 3 path parts: data/seed_X/activations/traj_YYYY_step_Z.pt
     parts = p.parts
     if "activations" in parts:

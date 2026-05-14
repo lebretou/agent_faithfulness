@@ -1,15 +1,13 @@
-"""Generate the trajectory corpus on Colab Pro+ A100.
-
-project_plan.md sections 5.5, 6, 7, 11 (Day 1 overnight).
+"""Generate the trajectory corpus on a GPU host.
 
 Resumable: appends each finished trajectory to JSONL immediately and skips
 already-done trajectory_ids on --resume.
 
-Usage (from a Colab cell):
-    !python scripts/01_generate_corpus.py \
+Usage:
+    python scripts/01_generate_corpus.py \
         --config configs/default.yaml \
         --n_trajectories 250 \
-        --out_dir /content/drive/MyDrive/agent_faithfulness/data
+        --out_dir data
 """
 from __future__ import annotations
 
@@ -68,7 +66,7 @@ def main():
     ap.add_argument("--n_trajectories", type=int, default=None,
                     help="Override config.n_trajectories.")
     ap.add_argument("--out_dir", default=None,
-                    help="Override config.out_dir. Use Drive path on Colab.")
+                    help="Override config.out_dir.")
     ap.add_argument("--seed", type=int, default=None,
                     help="Override config.seed for query+perturbation RNG. "
                          "Catalog seed is fixed at config.seed so all seeds share the world.")

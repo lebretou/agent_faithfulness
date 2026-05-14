@@ -1,7 +1,4 @@
-"""Single source of truth for the synthetic shopping schema.
-
-See project_plan.md section 5.1.
-"""
+"""Single source of truth for the synthetic shopping schema."""
 from __future__ import annotations
 
 CATEGORIES = ["shirt", "pants", "shoes", "jacket", "hat", "bag", "watch", "sunglasses"]

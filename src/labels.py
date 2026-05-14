@@ -1,4 +1,4 @@
-"""Free deterministic labels for trajectories. project_plan.md section 6.4."""
+"""Free deterministic labels for trajectories."""
 from __future__ import annotations
 
 import re

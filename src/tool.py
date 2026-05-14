@@ -1,4 +1,4 @@
-"""Search tool. project_plan.md section 5.3."""
+"""Search tool."""
 from __future__ import annotations
 
 

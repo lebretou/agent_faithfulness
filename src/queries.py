@@ -1,4 +1,4 @@
-"""Query templates and rejection-sampled query generation. project_plan.md 5.2."""
+"""Query templates and rejection-sampled query generation."""
 from __future__ import annotations
 
 import random

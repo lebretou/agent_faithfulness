@@ -1,4 +1,4 @@
-"""Activation steering. project_plan.md section 10.
+"""Activation steering.
 
 Two routes for the steering direction:
 - Probe-derived: take the trained logistic-regression weight vector at the
@@ -71,7 +71,7 @@ def make_steering_hook(
     of shape (batch, seq, hidden) — standard layout for a HuggingFace
     transformer block.
 
-    `prefill_only=True` (default, matches project_plan.md §10.2): only fire on
+    `prefill_only=True` (default, matches): only fire on
     multi-token forward passes (prefill), not on cached single-token generation
     steps. This nudges the model's representation of the input *before* CoT
     begins, rather than persistently altering every token it generates.

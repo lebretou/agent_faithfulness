@@ -1,4 +1,4 @@
-"""Catalog generation. project_plan.md section 5.1."""
+"""Catalog generation."""
 from __future__ import annotations
 
 import json

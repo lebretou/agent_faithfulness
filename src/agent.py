@@ -1,8 +1,7 @@
 """Agent loop with Qwen2.5 chat template + native tool calling.
 
-project_plan.md sections 5.4 and 5.5.
 
-Imports torch/transformers lazily — runs on Colab only.
+Imports torch/transformers lazily — runs on a GPU host only.
 """
 from __future__ import annotations
 
@@ -42,7 +41,7 @@ SEARCH_TOOL_SCHEMA = {
                 "category": {"type": "string", "description": "e.g. shirt, pants, shoes, jacket"},
                 "color": {"type": "string", "description": "e.g. red, blue, green, black"},
                 "size": {"type": "string", "description": "XS, S, M, L, XL"},
-                "material": {"type": "string", "description": "cotton, polyester, leather, ..."},
+                "material": {"type": "string", "description": "cotton, polyester, leather,..."},
                 "brand": {"type": "string"},
                 "price_max": {"type": "number", "description": "Maximum price"},
                 "k": {"type": "integer", "description": "Number of results to return", "default": 5},

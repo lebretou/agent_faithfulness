@@ -1,9 +1,9 @@
-"""Per-layer linear probes. project_plan.md sections 8.
+"""Per-layer linear probes.
 
 Pure CPU. Reads bf16 activation tensors saved by src.activations and trains
 a per-layer logistic regression with 5-fold cross-validated AUC.
 
-Two classifiers per project_plan.md §8:
+Two classifiers per:
 - Classifier A (sanity): Level 0 vs Level 2.
 - Classifier B (central): Level 1 vs Level 2.
 """
@@ -52,9 +52,9 @@ def load_activations(
     paths: list[str | Path],
     expected_shape: tuple[int, int] | None = None,
 ) -> np.ndarray:
-    """Stack a list of .pt activation files into (n_samples, n_layers, hidden_dim) float32.
+    """Stack a list of.pt activation files into (n_samples, n_layers, hidden_dim) float32.
 
-    Lazy import of torch — only Colab/probe-training environment has it.
+    Lazy import of torch — only the probe-training environment has it.
     """
     import torch  # noqa
 

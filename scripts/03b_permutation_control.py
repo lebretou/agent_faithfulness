@@ -6,9 +6,9 @@ elevated, the original probe AUC reflects a setup-side confound (e.g.,
 unbalanced trajectory length, batch-position bias) rather than genuine
 linear separability of the labelled classes.
 
-Usage (Colab):
+Usage:
     python scripts/03b_permutation_control.py \
-        --root /content/drive/MyDrive/agent_faithfulness/data \
+        --root data \
         --seeds 42 43 44 \
         --n_perms 3
 """

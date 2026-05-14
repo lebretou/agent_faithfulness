@@ -51,7 +51,7 @@ def main():
     ap.add_argument("--out_dir", default="figures")
     ap.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
     ap.add_argument("--steering_summary", nargs="*", default=None,
-                    help="Path(s) to steering_summary.json (Day 3). Multiple "
+                    help="Path(s) to steering_summary.json. Multiple "
                          "files are merged by α; duplicate αs are deduplicated "
                          "(later file wins). If provided, writes "
                          "figures/steering_curve.png.")
@@ -119,7 +119,7 @@ def main():
     )
     print(f"Wrote {out_dir / 'three_curve_plot.png'}")
 
-    # ---- Figure 3: steering curve (Day 3) ----
+    # ---- Figure 3: steering curve ----
     if args.steering_summary:
         merged_per_alpha: dict[float, dict] = {}
         best_layer = None

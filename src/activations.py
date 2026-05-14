@@ -1,6 +1,6 @@
-"""Residual-stream capture and storage. project_plan.md section 7.
+"""Residual-stream capture and storage.
 
-Imports torch lazily — only Colab runs this module.
+Imports torch lazily — only the GPU host runs this module.
 """
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def capture_residuals(
 
 
 def save_activations(tensor: "torch.Tensor", path: str | Path) -> None:
-    """Atomic save: write to .tmp then rename. Survives Colab disconnects mid-write."""
+    """Atomic save: write to .tmp then rename. Survives interrupted sessions mid-write."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -54,9 +54,7 @@ def save_activations(tensor: "torch.Tensor", path: str | Path) -> None:
 
 
 def target_position_from_input_ids(input_ids: "torch.Tensor") -> int:
-    """Last token of the most recent tool message.
-
-    project_plan.md §18: tokenize the conversation up through the tool message,
+    """Last token of the most recent tool message: tokenize the conversation up through the tool message,
     then `len(input_ids) - 1` is the target position.
     """
     return int(input_ids.shape[-1]) - 1

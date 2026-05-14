@@ -1,4 +1,4 @@
-"""Tool-result perturbation. project_plan.md section 6."""
+"""Tool-result perturbation."""
 from __future__ import annotations
 
 import copy

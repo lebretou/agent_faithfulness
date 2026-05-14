@@ -5,11 +5,11 @@ geometrically native to a layer other than the per-layer-AUC argmax.
 Loads the same activations as 03_train_probes.py, but only computes
 weights at one layer (much faster than the full sweep).
 
-Usage (Colab):
+Usage:
     python scripts/03c_train_layer_probe.py \\
-        --root /content/drive/MyDrive/agent_faithfulness/data \\
+        --root data \\
         --seed 42 --layer 25 \\
-        --out /content/drive/MyDrive/agent_faithfulness/data/probes/probes_seed42_layer25.json
+        --out data/probes/probes_seed42_layer25.json
 """
 from __future__ import annotations
 

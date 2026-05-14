@@ -1,4 +1,4 @@
-"""Day 3 steering sweep. project_plan.md sections 10.2 and 10.3.
+"""Steering sweep.
 
 For each α in --alphas, attach a forward-hook adding α·direction at the
 probe's best layer (prefill-only, last-token position) and generate fresh
@@ -15,11 +15,11 @@ Outputs:
   {out_dir}/alpha_{α}/trajectories.jsonl
   {out_dir}/steering_summary.json   (alphas + rates, ready for 05_make_figures)
 
-Usage on Colab:
+Usage:
     python scripts/04_steering_sweep.py \
-      --probe_json /content/drive/MyDrive/agent_faithfulness/data/probes/probes_seed42.json \
-      --catalog    /content/drive/MyDrive/agent_faithfulness/data/catalog.json \
-      --out_dir    /content/drive/MyDrive/agent_faithfulness/data/steering_run1 \
+      --probe_json data/probes/probes_seed42.json \
+      --catalog    data/catalog.json \
+      --out_dir    data/steering_run1 \
       --alphas 0 0.5 1 2 4 \
       --n_l2 50 --n_l0 25 \
       --seed 100
