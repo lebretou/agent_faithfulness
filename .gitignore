@@ -10,12 +10,10 @@ venv/
 
 # Data + artifacts (regeneratable)
 data/
-figures/
 logs/
 *.pt
 *.jsonl
 
 # Keep the directories themselves
 !data/.gitkeep
-!figures/.gitkeep
 !logs/.gitkeep
